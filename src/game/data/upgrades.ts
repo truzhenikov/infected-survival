@@ -1,42 +1,36 @@
-import { UPGRADE_IDS, type UpgradeDefinition } from '../types';
+import { UPGRADE_IDS } from '../constants';
+import type { UpgradeDefinition, UpgradeId } from '../types';
 
-export { UPGRADE_IDS } from '../types';
-
-export const UPGRADE_DEFINITIONS: UpgradeDefinition[] = [
-  {
-    id: 'fire-rate',
+const UPGRADE_CONTENT: Record<UpgradeId, Omit<UpgradeDefinition, 'id'>> = {
+  'fire-rate': {
     name: 'Faster Cycling',
     description: 'Reduce the delay between shots.'
   },
-  {
-    id: 'max-hp',
+  'max-hp': {
     name: 'Reinforced Jacket',
     description: 'Increase maximum health.'
   },
-  {
-    id: 'bullet-damage',
+  'bullet-damage': {
     name: 'Hot Loads',
     description: 'Increase bullet damage.'
   },
-  {
-    id: 'ammo-refill',
+  'ammo-refill': {
     name: 'Ammo Refill',
     description: 'Top up the current magazine.'
   },
-  {
-    id: 'small-heal',
+  'small-heal': {
     name: 'Field Dressing',
     description: 'Recover a small amount of health.'
   },
-  {
-    id: 'trap',
+  trap: {
     name: 'Snap Trap',
     description: 'Gain one deployable trap charge.'
   }
-] satisfies UpgradeDefinition[];
+};
 
-const definedUpgradeIds = UPGRADE_DEFINITIONS.map((upgrade) => upgrade.id);
+export { UPGRADE_IDS };
 
-if (definedUpgradeIds.length !== UPGRADE_IDS.length || definedUpgradeIds.some((id, index) => id !== UPGRADE_IDS[index])) {
-  throw new Error('Upgrade definitions must stay aligned with UPGRADE_IDS.');
-}
+export const UPGRADE_DEFINITIONS: UpgradeDefinition[] = UPGRADE_IDS.map((id) => ({
+  id,
+  ...UPGRADE_CONTENT[id]
+}));

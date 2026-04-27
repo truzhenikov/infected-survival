@@ -1,6 +1,6 @@
-import type { PlayerState, PlayerStats } from './types';
+import type { PlayerState, PlayerStats, UpgradeId } from './types';
 
-export const DEFAULT_PLAYER_STATS: PlayerStats = {
+export const DEFAULT_PLAYER_STATS: Readonly<PlayerStats> = {
   maxHealth: 100,
   fireRateMs: 300,
   bulletDamage: 20,
@@ -8,8 +8,25 @@ export const DEFAULT_PLAYER_STATS: PlayerStats = {
   trapCharges: 0
 };
 
-export const DEFAULT_PLAYER_STATE: PlayerState = {
-  health: DEFAULT_PLAYER_STATS.maxHealth,
-  ammo: DEFAULT_PLAYER_STATS.ammoCapacity,
-  stats: DEFAULT_PLAYER_STATS
+export const UPGRADE_IDS: readonly UpgradeId[] = [
+  'fire-rate',
+  'max-hp',
+  'bullet-damage',
+  'ammo-refill',
+  'small-heal',
+  'trap'
+] as const;
+
+export const createDefaultPlayerStats = (): PlayerStats => ({
+  ...DEFAULT_PLAYER_STATS
+});
+
+export const createDefaultPlayerState = (): PlayerState => {
+  const stats = createDefaultPlayerStats();
+
+  return {
+    health: stats.maxHealth,
+    ammo: stats.ammoCapacity,
+    stats
+  };
 };

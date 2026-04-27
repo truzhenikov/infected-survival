@@ -1,15 +1,13 @@
 export const ENEMY_IDS = ['runner', 'heavy'] as const;
 export type EnemyId = (typeof ENEMY_IDS)[number];
 
-export const UPGRADE_IDS = [
-  'fire-rate',
-  'max-hp',
-  'bullet-damage',
-  'ammo-refill',
-  'small-heal',
-  'trap'
-] as const;
-export type UpgradeId = (typeof UPGRADE_IDS)[number];
+export type UpgradeId =
+  | 'fire-rate'
+  | 'max-hp'
+  | 'bullet-damage'
+  | 'ammo-refill'
+  | 'small-heal'
+  | 'trap';
 
 export type EnemyDefinition = {
   id: EnemyId;
