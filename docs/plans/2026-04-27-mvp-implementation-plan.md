@@ -15,9 +15,9 @@
 These assumptions are fixed to avoid blocking implementation:
 
 - **Engine:** Phaser 3
-- **Platform:** desktop browser first
+- **Platform:** mobile browser first
 - **Camera/readability:** top-down gameplay with a gritty pseudo-isometric art direction
-- **Control scheme:** WASD movement + mouse aim + left click fire
+- **Control scheme:** touch controls — left virtual joystick for movement + right-side fire button/zone with auto-aim to the nearest valid enemy
 - **Setting:** abandoned gas station forecourt / service yard
 - **Game loop:** one static arena, escalating waves, short intermission, choose 1 of 3 upgrades
 - **Initial enemy roster:** Runner and Heavy
@@ -187,7 +187,14 @@ git commit -m "feat: add core wave enemy and upgrade data"
 
 ## Task 3: Implement player movement, aim, and shooting shell
 
-**Objective:** Make a controllable player entity with movement, aim direction, ammo tracking, and bullet spawning.
+**Objective:** Make a controllable player entity with mobile-first movement, touch-friendly aiming/fire behavior, ammo tracking, and bullet spawning.
+
+**Mobile control requirements:**
+- left thumb virtual joystick controls movement
+- right-side touch button or touch zone triggers firing
+- aiming uses auto-aim toward the nearest valid enemy in range/priority cone for MVP
+- no mouse dependency in the core control loop
+- controls must remain usable on a portrait-friendly or landscape-mobile layout
 
 **Files:**
 - Create: `src/game/entities/Player.ts`
@@ -212,9 +219,9 @@ Expected: FAIL because combat helpers do not exist.
 
 Implement:
 - player state model
-- keyboard movement
-- mouse aim
-- click-to-fire bullet creation
+- touch joystick movement
+- auto-aim target selection
+- tap/hold-to-fire bullet creation from a right-side fire control
 - ammo and reload helper functions
 
 **Step 4: Run tests and build**
