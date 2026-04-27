@@ -41,6 +41,7 @@ export type PlayerStats = {
 export type PlayerState = {
   health: number;
   ammo: number;
+  reserveAmmo: number;
   stats: PlayerStats;
 };
 
