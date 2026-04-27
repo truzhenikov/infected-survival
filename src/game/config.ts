@@ -2,13 +2,14 @@ import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
 import { MainMenuScene } from './scenes/MainMenuScene';
 import { GameScene } from './scenes/GameScene';
+import { UIScene } from './scenes/UIScene';
 
 export const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
   width: 540,
   height: 960,
   backgroundColor: '#111827',
-  scene: [BootScene, MainMenuScene, GameScene],
+  scene: [BootScene, MainMenuScene, GameScene, UIScene],
   physics: {
     default: 'arcade',
     arcade: {

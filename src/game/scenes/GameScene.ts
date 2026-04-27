@@ -12,7 +12,8 @@ import {
   PLAYER_MOVE_SPEED
 } from '../constants';
 import { ENEMY_DEFINITIONS } from '../data/enemies';
-import type { EnemyId, PlayerState } from '../types';
+import type { EnemyId, PlayerState, UpgradeDefinition, UpgradeId } from '../types';
+import { UIScene } from './UIScene';
 import {
   applyDamage,
   consumeAmmo,
@@ -24,6 +25,7 @@ import {
 } from '../systems/combat';
 import { applyPlayerDamage, createGameState } from '../systems/gameState';
 import { buildSpawnQueue, createEdgeSpawnPosition, getSpawnEdgeForIndex, resolveSpawnCadence } from '../systems/spawning';
+import { applyUpgrade, getUpgradeOffers } from '../systems/upgrades';
 import {
   advanceToNextWave,
   createWaveProgressState,
@@ -36,6 +38,7 @@ type PointerLike = Pick<Phaser.Input.Pointer, 'id' | 'x' | 'y' | 'worldX' | 'wor
 
 const PLAYER_CONTACT_DAMAGE_COOLDOWN_MS = 500;
 const NEXT_WAVE_DELAY_MS = 1_200;
+const INTERMISSION_DURATION_MS = 6_000;
 
 type ArcadeSprite = Phaser.GameObjects.GameObject & { body?: Phaser.Physics.Arcade.Body };
 
@@ -77,6 +80,10 @@ export class GameScene extends Phaser.Scene {
   private joystickMovement = new Phaser.Math.Vector2();
   private fireHeld = false;
   private currentAutoAimTargetId?: string;
+  private uiScene?: UIScene;
+  private intermissionOffers: UpgradeDefinition[] = [];
+  private intermissionEndsAt = Number.POSITIVE_INFINITY;
+  private intermissionActive = false;
 
   private get playerState(): PlayerState {
     return this.gameState.player;
@@ -95,6 +102,10 @@ export class GameScene extends Phaser.Scene {
     this.spawnSequenceIndex = 0;
     this.enemyInstanceId = 0;
     this.currentAutoAimTargetId = undefined;
+    this.uiScene = undefined;
+    this.intermissionOffers = [];
+    this.intermissionEndsAt = Number.POSITIVE_INFINITY;
+    this.intermissionActive = false;
     this.joystickPointerId = null;
     this.firePointerId = null;
     this.fireHeld = false;
@@ -119,6 +130,11 @@ export class GameScene extends Phaser.Scene {
     this.bullets = this.add.group({ runChildUpdate: true });
     this.enemies = this.add.group({ runChildUpdate: true });
     this.configureCombatOverlaps();
+    if (!this.scene.isActive('ui')) {
+      this.scene.launch('ui');
+    }
+    this.uiScene = this.scene.get('ui') as UIScene;
+    this.uiScene.hideIntermission();
     this.beginWave(this.waveState, this.time.now, 250);
 
     this.movementKeys = this.input.keyboard!.addKeys({
@@ -203,6 +219,12 @@ export class GameScene extends Phaser.Scene {
     this.startNextWaveIfReady(this.time.now);
 
     if (this.gameState.phase === 'game-over') {
+      return;
+    }
+
+    if (this.intermissionActive) {
+      this.player.move(new Phaser.Math.Vector2(0, 0), 0);
+      this.uiScene?.setIntermissionCountdown(this.intermissionEndsAt - this.time.now);
       return;
     }
 
@@ -315,6 +337,11 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (this.intermissionActive) {
+      this.hintText.setText(`Wave ${this.waveState.wave.number} cleared. Pick one of 3 upgrades.`);
+      return;
+    }
+
     if (this.waveState.phase === 'cleared') {
       this.hintText.setText(`Wave ${this.waveState.wave.number} cleared. Next wave incoming...`);
       return;
@@ -336,7 +363,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startNextWaveIfReady(time: number): void {
-    if (this.nextWaveAt === Number.POSITIVE_INFINITY || time < this.nextWaveAt || this.gameState.phase === 'game-over') {
+    if (
+      this.intermissionActive ||
+      this.nextWaveAt === Number.POSITIVE_INFINITY ||
+      time < this.nextWaveAt ||
+      this.gameState.phase === 'game-over'
+    ) {
       return;
     }
 
@@ -424,7 +456,7 @@ export class GameScene extends Phaser.Scene {
       enemy.destroy();
       this.waveState = registerEnemyDefeat(this.waveState);
       if (this.waveState.phase === 'cleared') {
-        this.nextWaveAt = this.time.now + NEXT_WAVE_DELAY_MS;
+        this.enterIntermission();
       }
     }
 
@@ -453,7 +485,11 @@ export class GameScene extends Phaser.Scene {
   private enterGameOver(): void {
     this.nextEnemySpawnAt = Number.POSITIVE_INFINITY;
     this.nextWaveAt = Number.POSITIVE_INFINITY;
+    this.intermissionEndsAt = Number.POSITIVE_INFINITY;
+    this.intermissionActive = false;
+    this.intermissionOffers = [];
     this.fireHeld = false;
+    this.uiScene?.hideIntermission();
     this.setFireButtonPressed(false);
     this.player.move(new Phaser.Math.Vector2(0, 0), 0);
     this.enemies
@@ -512,6 +548,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handlePointerDown(pointer: PointerLike): void {
+    if (this.intermissionActive) {
+      return;
+    }
+
     if (pointer.leftButtonDown && !pointer.leftButtonDown()) {
       return;
     }
@@ -530,6 +570,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handlePointerMove(pointer: PointerLike): void {
+    if (this.intermissionActive) {
+      return;
+    }
+
     if (pointer.id === this.joystickPointerId) {
       this.updateJoystick(pointer);
     }
@@ -547,6 +591,61 @@ export class GameScene extends Phaser.Scene {
       this.fireHeld = false;
       this.setFireButtonPressed(false);
     }
+  }
+
+  private enterIntermission(): void {
+    this.intermissionOffers = getUpgradeOffers(this.playerState);
+
+    if (this.intermissionOffers.length === 0) {
+      this.nextWaveAt = this.time.now + NEXT_WAVE_DELAY_MS;
+      return;
+    }
+
+    this.intermissionActive = true;
+    this.intermissionEndsAt = this.time.now + INTERMISSION_DURATION_MS;
+    this.nextEnemySpawnAt = Number.POSITIVE_INFINITY;
+    this.nextWaveAt = Number.POSITIVE_INFINITY;
+    this.currentAutoAimTargetId = undefined;
+    this.fireHeld = false;
+    this.firePointerId = null;
+    this.joystickPointerId = null;
+    this.joystickMovement.set(0, 0);
+    this.player.move(new Phaser.Math.Vector2(0, 0), 0);
+    this.joystickThumb.setPosition(this.joystickBase.x, this.joystickBase.y);
+    this.setFireButtonPressed(false);
+    this.uiScene?.showIntermission({
+      waveNumber: this.waveState.wave.number,
+      offers: this.intermissionOffers,
+      timeoutMs: INTERMISSION_DURATION_MS,
+      onSelect: (upgradeId) => {
+        this.resolveIntermission(upgradeId);
+      }
+    });
+    this.time.delayedCall(INTERMISSION_DURATION_MS, () => {
+      this.resolveIntermission();
+    });
+    this.updateHud();
+  }
+
+  private resolveIntermission(selectedUpgradeId?: UpgradeId): void {
+    if (!this.intermissionActive) {
+      return;
+    }
+
+    const chosenUpgradeId = selectedUpgradeId ?? this.intermissionOffers[0]?.id;
+    if (chosenUpgradeId) {
+      this.gameState = {
+        ...this.gameState,
+        player: applyUpgrade(this.playerState, chosenUpgradeId)
+      };
+    }
+
+    this.intermissionActive = false;
+    this.intermissionEndsAt = Number.POSITIVE_INFINITY;
+    this.intermissionOffers = [];
+    this.uiScene?.hideIntermission();
+    this.nextWaveAt = this.time.now + NEXT_WAVE_DELAY_MS;
+    this.updateHud();
   }
 
   private updateJoystick(pointer: Pick<PointerLike, 'x' | 'y'>): void {
