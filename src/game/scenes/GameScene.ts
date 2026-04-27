@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { Player } from '../entities/Player';
 import { Bullet } from '../entities/Bullet';
+import { Enemy } from '../entities/Enemy';
 import {
   ARENA_MARGIN,
   AUTO_AIM_CONE_RADIANS,
@@ -11,6 +12,9 @@ import {
   PLAYER_MOVE_SPEED,
   createDefaultPlayerState
 } from '../constants';
+import { ENEMY_DEFINITIONS } from '../data/enemies';
+import { createWaveDefinition } from '../data/waves';
+import type { EnemyId } from '../types';
 import {
   consumeAmmo,
   reloadWeapon,
@@ -19,12 +23,14 @@ import {
   selectAutoAimTarget,
   type AutoAimCandidate
 } from '../systems/combat';
+import { buildSpawnQueue, createEdgeSpawnPosition, getSpawnEdgeForIndex, resolveSpawnCadence } from '../systems/spawning';
 
 type PointerLike = Pick<Phaser.Input.Pointer, 'id' | 'x' | 'y' | 'worldX' | 'worldY' | 'leftButtonDown'>;
 
 export class GameScene extends Phaser.Scene {
   private player!: Player;
   private bullets!: Phaser.GameObjects.Group;
+  private enemies!: Phaser.GameObjects.Group;
   private ammoText!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
   private movementKeys!: {
@@ -40,6 +46,11 @@ export class GameScene extends Phaser.Scene {
   private fireLabel!: Phaser.GameObjects.Text;
   private playerState = createDefaultPlayerState();
   private lastShotAt = Number.NEGATIVE_INFINITY;
+  private nextEnemySpawnAt = Number.NEGATIVE_INFINITY;
+  private spawnIntervalMs = 1_000;
+  private spawnQueue: EnemyId[] = [];
+  private spawnSequenceIndex = 0;
+  private enemyInstanceId = 0;
   private escHandler?: () => void;
   private resizeHandler?: (gameSize: Phaser.Structs.Size) => void;
   private pointerDownHandler?: (pointer: Phaser.Input.Pointer) => void;
@@ -79,7 +90,13 @@ export class GameScene extends Phaser.Scene {
     this.player.setTint(0xdbeafe);
 
     this.bullets = this.add.group({ runChildUpdate: true });
-    this.createAutoAimPracticeTargets();
+    this.enemies = this.add.group({ runChildUpdate: true });
+    const previewWave = createWaveDefinition(1);
+    this.spawnQueue = buildSpawnQueue(previewWave.enemies);
+    this.spawnIntervalMs = previewWave.spawnIntervalMs;
+    this.spawnSequenceIndex = 0;
+    this.enemyInstanceId = 0;
+    this.nextEnemySpawnAt = this.time.now + 250;
 
     this.movementKeys = this.input.keyboard!.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -135,7 +152,6 @@ export class GameScene extends Phaser.Scene {
         this.scale.width - ARENA_MARGIN * 2,
         this.scale.height - ARENA_MARGIN * 2
       );
-      this.createAutoAimPracticeTargets();
     };
     this.scale.on(Phaser.Scale.Events.RESIZE, this.resizeHandler);
 
@@ -161,8 +177,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(): void {
+    this.spawnEnemiesIfNeeded(this.time.now);
+
     const movement = this.resolveMovementVector();
     this.player.move(movement, PLAYER_MOVE_SPEED);
+    this.updateEnemies();
 
     const autoAimTarget = this.resolveAutoAimTarget();
     const aimAngle = resolveAimAngle({
@@ -207,10 +226,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getAutoAimCandidates(): AutoAimCandidate[] {
-    return this.children.list
-      .filter((child): child is Phaser.GameObjects.GameObject & { x: number; y: number; active: boolean; name?: string } => {
-        return child.name?.startsWith('enemy-') === true && 'x' in child && 'y' in child;
-      })
+    return this.enemies
+      .getChildren()
+      .filter((child): child is Enemy => child instanceof Enemy)
       .map((enemy) => ({
         id: enemy.name ?? `${enemy.x}-${enemy.y}`,
         x: enemy.x,
@@ -260,24 +278,65 @@ export class GameScene extends Phaser.Scene {
 
   private updateHud(): void {
     this.ammoText.setText(
-      `HP ${this.playerState.health}/${this.playerState.stats.maxHealth}   Ammo ${this.playerState.ammo}/${this.playerState.stats.ammoCapacity}   Reserve ${this.playerState.reserveAmmo}`
+      `HP ${this.playerState.health}/${this.playerState.stats.maxHealth}   Ammo ${this.playerState.ammo}/${this.playerState.stats.ammoCapacity}   Reserve ${this.playerState.reserveAmmo}   Infected ${this.enemies.countActive(true)}`
     );
   }
 
-  private createAutoAimPracticeTargets(): void {
-    const targets = [
-      { name: 'enemy-practice-runner', x: this.scale.width * 0.72, y: this.scale.height * 0.42, color: 0xef4444 },
-      { name: 'enemy-practice-heavy', x: this.scale.width * 0.3, y: this.scale.height * 0.68, color: 0xb91c1c }
-    ];
+  private spawnEnemiesIfNeeded(time: number): void {
+    const cadence = resolveSpawnCadence({
+      now: time,
+      nextSpawnAt: this.nextEnemySpawnAt,
+      intervalMs: this.spawnIntervalMs,
+      remainingCount: this.spawnQueue.length
+    });
 
-    for (const target of targets) {
-      this.children.getByName(target.name)?.destroy();
-
-      this.add
-        .circle(target.x, target.y, 18, target.color, 0.92)
-        .setName(target.name)
-        .setDepth(1);
+    if (cadence.spawnCount === 0) {
+      return;
     }
+
+    this.nextEnemySpawnAt = cadence.nextSpawnAt;
+
+    const arena = {
+      left: ARENA_MARGIN,
+      top: ARENA_MARGIN,
+      right: this.scale.width - ARENA_MARGIN,
+      bottom: this.scale.height - ARENA_MARGIN
+    };
+
+    for (let spawnIndex = 0; spawnIndex < cadence.spawnCount; spawnIndex += 1) {
+      const nextEnemyId = this.spawnQueue.shift();
+      if (!nextEnemyId) {
+        this.nextEnemySpawnAt = Number.POSITIVE_INFINITY;
+        break;
+      }
+
+      const progress = ((this.spawnSequenceIndex % 5) + 1) / 6;
+      const edge = getSpawnEdgeForIndex(this.spawnSequenceIndex);
+      const spawnPosition = createEdgeSpawnPosition({ arena, edge, progress });
+      const enemy = new Enemy(
+        this,
+        spawnPosition.x,
+        spawnPosition.y,
+        ENEMY_DEFINITIONS[nextEnemyId],
+        this.enemyInstanceId++
+      );
+
+      this.enemies.add(enemy);
+      this.spawnSequenceIndex += 1;
+    }
+
+    if (this.spawnQueue.length === 0) {
+      this.nextEnemySpawnAt = Number.POSITIVE_INFINITY;
+    }
+
+    this.updateHud();
+  }
+
+  private updateEnemies(): void {
+    this.enemies
+      .getChildren()
+      .filter((child): child is Enemy => child instanceof Enemy)
+      .forEach((enemy) => enemy.seek(this.player));
   }
 
   private createTouchControls(): void {
@@ -418,6 +477,16 @@ export class GameScene extends Phaser.Scene {
       bulletGraphics.fillCircle(4, 4, 4);
       bulletGraphics.generateTexture('bullet', 8, 8);
       bulletGraphics.destroy();
+    }
+
+    if (!this.textures.exists('enemy')) {
+      const enemyGraphics = this.make.graphics({ x: 0, y: 0 }, false);
+      enemyGraphics.fillStyle(0xffffff, 1);
+      enemyGraphics.fillCircle(16, 16, 16);
+      enemyGraphics.lineStyle(3, 0x111827, 1);
+      enemyGraphics.strokeCircle(16, 16, 16);
+      enemyGraphics.generateTexture('enemy', 32, 32);
+      enemyGraphics.destroy();
     }
   }
 }

@@ -17,6 +17,8 @@ export type EnemyDefinition = {
   contactDamage: number;
   scoreValue: number;
   difficultyWeight: number;
+  radius: number;
+  tint: number;
 };
 
 export type WaveEnemyEntry = {

@@ -8,7 +8,9 @@ export const ENEMY_DEFINITIONS: Record<EnemyId, EnemyDefinition> = {
     speed: 160,
     contactDamage: 10,
     scoreValue: 10,
-    difficultyWeight: 1
+    difficultyWeight: 1,
+    radius: 16,
+    tint: 0xef4444
   },
   heavy: {
     id: 'heavy',
@@ -17,6 +19,8 @@ export const ENEMY_DEFINITIONS: Record<EnemyId, EnemyDefinition> = {
     speed: 90,
     contactDamage: 20,
     scoreValue: 25,
-    difficultyWeight: 3
+    difficultyWeight: 3,
+    radius: 22,
+    tint: 0x991b1b
   }
 };
