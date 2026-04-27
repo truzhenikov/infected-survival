@@ -5,6 +5,12 @@ import {
   createWaveDefinition,
   getWaveDifficultyScore
 } from '../../src/game/data/waves';
+import {
+  advanceToNextWave,
+  createWaveProgressState,
+  registerEnemyDefeat,
+  registerEnemySpawn
+} from '../../src/game/systems/waves';
 
 describe('wave data', () => {
   it('creates waves with increasing difficulty', () => {
@@ -47,5 +53,29 @@ describe('wave data', () => {
     expect(WAVE_DEFINITIONS).toHaveLength(10);
     expect(WAVE_DEFINITIONS[0].number).toBe(1);
     expect(WAVE_DEFINITIONS[9].number).toBe(10);
+  });
+});
+
+describe('wave progression', () => {
+  it('increases spawn pressure when advancing to the next wave', () => {
+    const wave1 = createWaveProgressState(1);
+    const wave2 = advanceToNextWave(wave1);
+
+    expect(wave2.wave.number).toBe(2);
+    expect(wave2.totalEnemies).toBeGreaterThan(wave1.totalEnemies);
+    expect(wave2.wave.spawnIntervalMs).toBeLessThan(wave1.wave.spawnIntervalMs);
+    expect(wave2.phase).toBe('spawning');
+  });
+
+  it('marks the wave as cleared only after all scheduled enemies are defeated', () => {
+    const started = registerEnemySpawn(createWaveProgressState(1), 6);
+    const almostCleared = registerEnemyDefeat(started, 5);
+    const cleared = registerEnemyDefeat(almostCleared, 1);
+
+    expect(almostCleared.phase).toBe('active');
+    expect(almostCleared.activeEnemies).toBe(1);
+    expect(cleared.phase).toBe('cleared');
+    expect(cleared.activeEnemies).toBe(0);
+    expect(cleared.defeatedEnemies).toBe(cleared.totalEnemies);
   });
 });

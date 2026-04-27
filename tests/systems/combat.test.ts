@@ -7,6 +7,7 @@ import {
   resolveJoystickInput,
   selectAutoAimTarget
 } from '../../src/game/systems/combat';
+import { createGameState, applyPlayerDamage } from '../../src/game/systems/gameState';
 
 describe('combat helpers', () => {
   it('prevents ammo from going below zero when firing', () => {
@@ -55,6 +56,15 @@ describe('combat helpers', () => {
     expect(applyDamage(30, 10)).toEqual({ health: 20, isDead: false });
     expect(applyDamage(10, 10)).toEqual({ health: 0, isDead: true });
     expect(applyDamage(5, 12)).toEqual({ health: 0, isDead: true });
+  });
+
+  it('transitions the game into the dead state when player hp reaches zero', () => {
+    const state = createGameState();
+    const damaged = applyPlayerDamage(state, 100);
+
+    expect(damaged.player.health).toBe(0);
+    expect(damaged.phase).toBe('game-over');
+    expect(damaged.canRestart).toBe(true);
   });
 
   it('ignores negative or zero damage', () => {

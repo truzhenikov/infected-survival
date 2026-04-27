@@ -9,13 +9,12 @@ import {
   BULLET_SPEED,
   FIRE_BUTTON_RADIUS,
   JOYSTICK_RADIUS,
-  PLAYER_MOVE_SPEED,
-  createDefaultPlayerState
+  PLAYER_MOVE_SPEED
 } from '../constants';
 import { ENEMY_DEFINITIONS } from '../data/enemies';
-import { createWaveDefinition } from '../data/waves';
-import type { EnemyId } from '../types';
+import type { EnemyId, PlayerState } from '../types';
 import {
+  applyDamage,
   consumeAmmo,
   reloadWeapon,
   resolveAimAngle,
@@ -23,9 +22,22 @@ import {
   selectAutoAimTarget,
   type AutoAimCandidate
 } from '../systems/combat';
+import { applyPlayerDamage, createGameState } from '../systems/gameState';
 import { buildSpawnQueue, createEdgeSpawnPosition, getSpawnEdgeForIndex, resolveSpawnCadence } from '../systems/spawning';
+import {
+  advanceToNextWave,
+  createWaveProgressState,
+  registerEnemyDefeat,
+  registerEnemySpawn,
+  type WaveProgressState
+} from '../systems/waves';
 
 type PointerLike = Pick<Phaser.Input.Pointer, 'id' | 'x' | 'y' | 'worldX' | 'worldY' | 'leftButtonDown'>;
+
+const PLAYER_CONTACT_DAMAGE_COOLDOWN_MS = 500;
+const NEXT_WAVE_DELAY_MS = 1_200;
+
+type ArcadeSprite = Phaser.GameObjects.GameObject & { body?: Phaser.Physics.Arcade.Body };
 
 export class GameScene extends Phaser.Scene {
   private player!: Player;
@@ -44,9 +56,13 @@ export class GameScene extends Phaser.Scene {
   private joystickThumb!: Phaser.GameObjects.Arc;
   private fireButton!: Phaser.GameObjects.Arc;
   private fireLabel!: Phaser.GameObjects.Text;
-  private playerState = createDefaultPlayerState();
+  private gameState = createGameState();
+  private waveState: WaveProgressState = createWaveProgressState(1);
+  private gameOverOverlay?: Phaser.GameObjects.Text;
   private lastShotAt = Number.NEGATIVE_INFINITY;
+  private lastPlayerHitAt = Number.NEGATIVE_INFINITY;
   private nextEnemySpawnAt = Number.NEGATIVE_INFINITY;
+  private nextWaveAt = Number.POSITIVE_INFINITY;
   private spawnIntervalMs = 1_000;
   private spawnQueue: EnemyId[] = [];
   private spawnSequenceIndex = 0;
@@ -62,18 +78,29 @@ export class GameScene extends Phaser.Scene {
   private fireHeld = false;
   private currentAutoAimTargetId?: string;
 
+  private get playerState(): PlayerState {
+    return this.gameState.player;
+  }
+
   constructor() {
     super('game');
   }
 
   create(): void {
-    this.playerState = createDefaultPlayerState();
+    this.gameState = createGameState();
+    this.waveState = createWaveProgressState(1);
     this.lastShotAt = Number.NEGATIVE_INFINITY;
+    this.lastPlayerHitAt = Number.NEGATIVE_INFINITY;
+    this.nextWaveAt = Number.POSITIVE_INFINITY;
+    this.spawnSequenceIndex = 0;
+    this.enemyInstanceId = 0;
     this.currentAutoAimTargetId = undefined;
     this.joystickPointerId = null;
     this.firePointerId = null;
     this.fireHeld = false;
     this.joystickMovement.set(0, 0);
+    this.gameOverOverlay?.destroy();
+    this.gameOverOverlay = undefined;
 
     this.input.addPointer(2);
     this.createPrimitiveTextures();
@@ -91,12 +118,8 @@ export class GameScene extends Phaser.Scene {
 
     this.bullets = this.add.group({ runChildUpdate: true });
     this.enemies = this.add.group({ runChildUpdate: true });
-    const previewWave = createWaveDefinition(1);
-    this.spawnQueue = buildSpawnQueue(previewWave.enemies);
-    this.spawnIntervalMs = previewWave.spawnIntervalMs;
-    this.spawnSequenceIndex = 0;
-    this.enemyInstanceId = 0;
-    this.nextEnemySpawnAt = this.time.now + 250;
+    this.configureCombatOverlaps();
+    this.beginWave(this.waveState, this.time.now, 250);
 
     this.movementKeys = this.input.keyboard!.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.W,
@@ -113,7 +136,7 @@ export class GameScene extends Phaser.Scene {
     });
     this.ammoText.setDepth(10).setScrollFactor(0);
 
-    this.hintText = this.add.text(20, 46, 'Left thumb move • right side hold to fire • auto-aim • R reload • ESC menu', {
+    this.hintText = this.add.text(20, 46, '', {
       color: '#9ca3af',
       fontFamily: 'Arial',
       fontSize: '14px',
@@ -177,6 +200,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(): void {
+    this.startNextWaveIfReady(this.time.now);
+
+    if (this.gameState.phase === 'game-over') {
+      return;
+    }
+
     this.spawnEnemiesIfNeeded(this.time.now);
 
     const movement = this.resolveMovementVector();
@@ -278,8 +307,40 @@ export class GameScene extends Phaser.Scene {
 
   private updateHud(): void {
     this.ammoText.setText(
-      `HP ${this.playerState.health}/${this.playerState.stats.maxHealth}   Ammo ${this.playerState.ammo}/${this.playerState.stats.ammoCapacity}   Reserve ${this.playerState.reserveAmmo}   Infected ${this.enemies.countActive(true)}`
+      `Wave ${this.waveState.wave.number} (${this.waveState.phase})   HP ${this.playerState.health}/${this.playerState.stats.maxHealth}   Ammo ${this.playerState.ammo}/${this.playerState.stats.ammoCapacity}   Reserve ${this.playerState.reserveAmmo}   Infected ${this.enemies.countActive(true)}`
     );
+
+    if (this.gameState.phase === 'game-over') {
+      this.hintText.setText('You were overrun. ESC menu to leave the yard.');
+      return;
+    }
+
+    if (this.waveState.phase === 'cleared') {
+      this.hintText.setText(`Wave ${this.waveState.wave.number} cleared. Next wave incoming...`);
+      return;
+    }
+
+    this.hintText.setText(
+      `Wave ${this.waveState.wave.number} • Left thumb move • right side hold to fire • auto-aim • R reload • ESC menu`
+    );
+  }
+
+  private beginWave(state: WaveProgressState, startTime: number, delayMs: number): void {
+    this.waveState = state;
+    this.spawnQueue = buildSpawnQueue(state.wave.enemies);
+    this.spawnIntervalMs = state.wave.spawnIntervalMs;
+    this.nextEnemySpawnAt = startTime + delayMs;
+    this.nextWaveAt = Number.POSITIVE_INFINITY;
+    this.currentAutoAimTargetId = undefined;
+    this.updateHud();
+  }
+
+  private startNextWaveIfReady(time: number): void {
+    if (this.nextWaveAt === Number.POSITIVE_INFINITY || time < this.nextWaveAt || this.gameState.phase === 'game-over') {
+      return;
+    }
+
+    this.beginWave(advanceToNextWave(this.waveState), time, 300);
   }
 
   private spawnEnemiesIfNeeded(time: number): void {
@@ -322,6 +383,7 @@ export class GameScene extends Phaser.Scene {
       );
 
       this.enemies.add(enemy);
+      this.waveState = registerEnemySpawn(this.waveState);
       this.spawnSequenceIndex += 1;
     }
 
@@ -337,6 +399,83 @@ export class GameScene extends Phaser.Scene {
       .getChildren()
       .filter((child): child is Enemy => child instanceof Enemy)
       .forEach((enemy) => enemy.seek(this.player));
+  }
+
+  private configureCombatOverlaps(): void {
+    this.physics.add.overlap(this.bullets as unknown as Phaser.GameObjects.Group, this.enemies as unknown as Phaser.GameObjects.Group, (bulletSprite, enemySprite) => {
+      this.handleBulletEnemyOverlap(bulletSprite as Bullet, enemySprite as Enemy);
+    });
+
+    this.physics.add.overlap(this.player as unknown as ArcadeSprite, this.enemies as unknown as Phaser.GameObjects.Group, (_playerSprite, enemySprite) => {
+      this.handlePlayerEnemyOverlap(enemySprite as Enemy);
+    });
+  }
+
+  private handleBulletEnemyOverlap(bullet: Bullet, enemy: Enemy): void {
+    if (!bullet.active || !enemy.active || this.gameState.phase === 'game-over') {
+      return;
+    }
+
+    bullet.destroy();
+    const result = applyDamage(enemy.health, bullet.damage);
+    enemy.health = result.health;
+
+    if (result.isDead) {
+      enemy.destroy();
+      this.waveState = registerEnemyDefeat(this.waveState);
+      if (this.waveState.phase === 'cleared') {
+        this.nextWaveAt = this.time.now + NEXT_WAVE_DELAY_MS;
+      }
+    }
+
+    this.updateHud();
+  }
+
+  private handlePlayerEnemyOverlap(enemy: Enemy): void {
+    if (!enemy.active || this.gameState.phase === 'game-over') {
+      return;
+    }
+
+    const now = this.time.now;
+    if (now - this.lastPlayerHitAt < PLAYER_CONTACT_DAMAGE_COOLDOWN_MS) {
+      return;
+    }
+
+    this.lastPlayerHitAt = now;
+    this.gameState = applyPlayerDamage(this.gameState, enemy.definition.contactDamage);
+    this.updateHud();
+
+    if (this.gameState.phase === 'game-over') {
+      this.enterGameOver();
+    }
+  }
+
+  private enterGameOver(): void {
+    this.nextEnemySpawnAt = Number.POSITIVE_INFINITY;
+    this.nextWaveAt = Number.POSITIVE_INFINITY;
+    this.fireHeld = false;
+    this.setFireButtonPressed(false);
+    this.player.move(new Phaser.Math.Vector2(0, 0), 0);
+    this.enemies
+      .getChildren()
+      .filter((child): child is Enemy => child instanceof Enemy)
+      .forEach((enemy) => {
+        const body = enemy.body as Phaser.Physics.Arcade.Body | undefined;
+        body?.setVelocity(0, 0);
+      });
+
+    this.gameOverOverlay?.destroy();
+    this.gameOverOverlay = this.add
+      .text(this.scale.width * 0.5, this.scale.height * 0.5, 'GAME OVER', {
+        color: '#fee2e2',
+        fontFamily: 'Arial',
+        fontSize: '42px',
+        stroke: '#450a0a',
+        strokeThickness: 6
+      })
+      .setOrigin(0.5)
+      .setDepth(20)
+      .setScrollFactor(0);
   }
 
   private createTouchControls(): void {
@@ -367,6 +506,7 @@ export class GameScene extends Phaser.Scene {
     this.joystickThumb.setPosition(this.joystickBase.x, this.joystickBase.y);
     this.fireButton.setPosition(width - sideInset - FIRE_BUTTON_RADIUS, height - bottomInset);
     this.fireLabel.setPosition(this.fireButton.x, this.fireButton.y);
+    this.gameOverOverlay?.setPosition(width * 0.5, height * 0.5);
 
     this.hintText.setWordWrapWidth(Math.max(220, width - 40));
   }
@@ -382,7 +522,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.firePointerId === null) {
+    if (this.firePointerId === null && this.gameState.phase !== 'game-over') {
       this.firePointerId = pointer.id;
       this.fireHeld = true;
       this.setFireButtonPressed(true);
@@ -430,7 +570,7 @@ export class GameScene extends Phaser.Scene {
 
   private isDesktopFirePressed(): boolean {
     const activePointer = this.input.activePointer;
-    return activePointer.leftButtonDown() && !this.isLeftControlZone(activePointer);
+    return this.gameState.phase !== 'game-over' && activePointer.leftButtonDown() && !this.isLeftControlZone(activePointer);
   }
 
   private setFireButtonPressed(pressed: boolean): void {
