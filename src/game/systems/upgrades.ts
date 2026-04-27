@@ -34,9 +34,23 @@ export const isUpgradeAvailable = (player: PlayerState, upgradeId: UpgradeId): b
 
 export const getUpgradeOffers = (
   player: PlayerState,
-  definitions: readonly UpgradeDefinition[] = UPGRADE_DEFINITIONS
-): UpgradeDefinition[] =>
-  definitions.filter((upgrade) => isUpgradeAvailable(player, upgrade.id)).slice(0, MAX_UPGRADE_OFFERS);
+  definitions: readonly UpgradeDefinition[] = UPGRADE_DEFINITIONS,
+  preferredStartIndex = 0
+): UpgradeDefinition[] => {
+  const availableUpgrades = definitions.filter((upgrade) => isUpgradeAvailable(player, upgrade.id));
+
+  if (availableUpgrades.length <= MAX_UPGRADE_OFFERS) {
+    return availableUpgrades;
+  }
+
+  const normalizedStartIndex =
+    ((preferredStartIndex % availableUpgrades.length) + availableUpgrades.length) % availableUpgrades.length;
+
+  return Array.from({ length: MAX_UPGRADE_OFFERS }, (_, index) => {
+    const nextIndex = (normalizedStartIndex + index) % availableUpgrades.length;
+    return availableUpgrades[nextIndex]!;
+  });
+};
 
 export const applyUpgrade = (player: PlayerState, upgradeId: UpgradeId): PlayerState => {
   switch (upgradeId) {

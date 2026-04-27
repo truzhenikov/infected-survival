@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { MAX_UPGRADE_OFFERS } from '../systems/upgrades';
 import type { UpgradeDefinition, UpgradeId } from '../types';
 
 type IntermissionConfig = {
@@ -58,7 +59,7 @@ export class UIScene extends Phaser.Scene {
       align: 'center'
     }).setOrigin(0.5).setDepth(102);
 
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < MAX_UPGRADE_OFFERS; index += 1) {
       const background = this.add.rectangle(0, 0, 0, 0, 0x1f2937, 1).setDepth(102);
       background.setStrokeStyle(2, 0x94a3b8, 0.8);
 
@@ -107,7 +108,7 @@ export class UIScene extends Phaser.Scene {
   showIntermission(config: IntermissionConfig): void {
     this.selectionHandler = config.onSelect;
     this.titleText.setText(`Wave ${config.waveNumber} cleared`);
-    this.subtitleText.setText('Choose one upgrade to keep the yard secure. Tap once to continue.');
+    this.subtitleText.setText('Choose one upgrade to keep the yard secure. Tap a card to continue.');
     this.setIntermissionCountdown(config.timeoutMs);
 
     this.cardViews.forEach((card, index) => {

@@ -84,6 +84,7 @@ export class GameScene extends Phaser.Scene {
   private intermissionOffers: UpgradeDefinition[] = [];
   private intermissionEndsAt = Number.POSITIVE_INFINITY;
   private intermissionActive = false;
+  private intermissionTimeoutEvent?: Phaser.Time.TimerEvent;
 
   private get playerState(): PlayerState {
     return this.gameState.player;
@@ -106,6 +107,7 @@ export class GameScene extends Phaser.Scene {
     this.intermissionOffers = [];
     this.intermissionEndsAt = Number.POSITIVE_INFINITY;
     this.intermissionActive = false;
+    this.clearIntermissionTimer();
     this.joystickPointerId = null;
     this.firePointerId = null;
     this.fireHeld = false;
@@ -195,6 +197,8 @@ export class GameScene extends Phaser.Scene {
     this.scale.on(Phaser.Scale.Events.RESIZE, this.resizeHandler);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.clearIntermissionTimer();
+      this.uiScene?.hideIntermission();
       if (this.escHandler) {
         this.input.keyboard?.off('keydown-ESC', this.escHandler);
       }
@@ -487,6 +491,7 @@ export class GameScene extends Phaser.Scene {
     this.nextWaveAt = Number.POSITIVE_INFINITY;
     this.intermissionEndsAt = Number.POSITIVE_INFINITY;
     this.intermissionActive = false;
+    this.clearIntermissionTimer();
     this.intermissionOffers = [];
     this.fireHeld = false;
     this.uiScene?.hideIntermission();
@@ -594,7 +599,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private enterIntermission(): void {
-    this.intermissionOffers = getUpgradeOffers(this.playerState);
+    this.clearIntermissionTimer();
+    this.intermissionOffers = getUpgradeOffers(this.playerState, undefined, this.waveState.wave.number - 1);
 
     if (this.intermissionOffers.length === 0) {
       this.nextWaveAt = this.time.now + NEXT_WAVE_DELAY_MS;
@@ -621,7 +627,7 @@ export class GameScene extends Phaser.Scene {
         this.resolveIntermission(upgradeId);
       }
     });
-    this.time.delayedCall(INTERMISSION_DURATION_MS, () => {
+    this.intermissionTimeoutEvent = this.time.delayedCall(INTERMISSION_DURATION_MS, () => {
       this.resolveIntermission();
     });
     this.updateHud();
@@ -632,6 +638,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    this.clearIntermissionTimer();
     const chosenUpgradeId = selectedUpgradeId ?? this.intermissionOffers[0]?.id;
     if (chosenUpgradeId) {
       this.gameState = {
@@ -646,6 +653,11 @@ export class GameScene extends Phaser.Scene {
     this.uiScene?.hideIntermission();
     this.nextWaveAt = this.time.now + NEXT_WAVE_DELAY_MS;
     this.updateHud();
+  }
+
+  private clearIntermissionTimer(): void {
+    this.intermissionTimeoutEvent?.remove(false);
+    this.intermissionTimeoutEvent = undefined;
   }
 
   private updateJoystick(pointer: Pick<PointerLike, 'x' | 'y'>): void {

@@ -63,4 +63,15 @@ describe('upgrade system', () => {
     expect(offers).toHaveLength(1);
     expect(offers[0]?.id).toBe('max-hp');
   });
+
+  it('rotates offer order to avoid showing the same first three upgrades every wave', () => {
+    const state = createDefaultPlayerState();
+
+    const firstWaveOffers = getUpgradeOffers(state, UPGRADE_DEFINITIONS, 0).map((offer) => offer.id);
+    const secondWaveOffers = getUpgradeOffers(state, UPGRADE_DEFINITIONS, 1).map((offer) => offer.id);
+
+    expect(firstWaveOffers).toEqual(['fire-rate', 'max-hp', 'bullet-damage']);
+    expect(secondWaveOffers).toEqual(['max-hp', 'bullet-damage', 'trap']);
+    expect(secondWaveOffers).not.toEqual(firstWaveOffers);
+  });
 });
